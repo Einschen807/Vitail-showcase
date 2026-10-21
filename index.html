@@ -1,0 +1,1082 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Vitail 遛狗积分应用项目展示：GPS 测距过滤、积分规则引擎、离线优先的 Firestore 云同步。">
+<style>
+:root { color-scheme: light; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+body { margin: 0; font: 14px/1.5 system-ui, -apple-system, sans-serif; }
+img { max-width: 100%; }
+[hidden] { display: none !important; }
+</style>
+<title>Vitail 遛狗积分应用</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Sans+SC:wght@400;500;700;900&display=swap">
+<style>
+/* Layout: a walk from left to right. Hero = pitch + live phone; then three "under the hood" demos
+   (GPS filter, points engine, cloud sync); then engineering record and timeline. Brand palette is the app's own. */
+:root {
+  --bg: #F0EEE9;          /* parchment, app screen background */
+  --surface: #FFFCF7;
+  --surface-2: #E8E4DC;
+  --ink: #263238;
+  --muted: #687078;
+  --line: #DDD8CE;
+  --copper: #CD533B;
+  --copper-soft: #F7E4DE;
+  --blue: #0F4C81;
+  --blue-soft: #DDE6EE;
+  --green: #8EA604;
+  --green-ink: #617005;
+  --green-soft: #E9EECF;
+  --street: #E3DED3;
+  --shadow: rgba(81, 72, 60, .14);
+
+  /* The phone always shows the real app UI, which is light-only. */
+  --app-bg: #F0EEE9; --app-card: #FFFCF7; --app-ink: #263238; --app-muted: #687078;
+  --app-copper: #CD533B; --app-copper-soft: #F7E4DE; --app-green: #617005; --app-green-soft: #E9EECF;
+  --app-blue: #0F4C81; --app-track: #DDD9D0; --app-line: #E2DED5; --app-map: #E9E5DC; --app-road: #FFFFFF;
+  --frame: #1E2326;
+
+  --f-display: "Bricolage Grotesque", "Noto Sans SC", system-ui, sans-serif;
+  --f-body: "Figtree", "Noto Sans SC", system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --ease: cubic-bezier(.22, .8, .24, 1);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #181614; --surface: #22201D; --surface-2: #2C2925; --ink: #ECE7DF; --muted: #A49D93; --line: #3A3631;
+    --copper: #E46D54; --copper-soft: #3A2620; --blue: #7FAEDC; --blue-soft: #1D2A36;
+    --green: #AEC82A; --green-ink: #C2D85A; --green-soft: #2A2F17; --street: #2E2B27; --shadow: rgba(0,0,0,.4);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #181614; --surface: #22201D; --surface-2: #2C2925; --ink: #ECE7DF; --muted: #A49D93; --line: #3A3631;
+  --copper: #E46D54; --copper-soft: #3A2620; --blue: #7FAEDC; --blue-soft: #1D2A36;
+  --green: #AEC82A; --green-ink: #C2D85A; --green-soft: #2A2F17; --street: #2E2B27; --shadow: rgba(0,0,0,.4);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--f-body); font-size: 16px; line-height: 1.65;
+  -webkit-font-smoothing: antialiased; overflow-x: hidden;
+}
+body.en .zh, body:not(.en) .en { display: none !important; }
+h1, h2, h3 { font-family: var(--f-display); line-height: 1.12; margin: 0; text-wrap: balance; letter-spacing: -.01em; }
+p { margin: 0; }
+a { color: var(--copper); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2.5px solid var(--copper); outline-offset: 3px; border-radius: 6px; }
+.wrap { max-width: 1120px; margin: 0 auto; padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px)); }
+.eyebrow { font-family: var(--f-mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--copper); font-weight: 600; }
+.mono { font-family: var(--f-mono); }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---------- top bar ---------- */
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 9; background: color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid transparent; transition: border-color .3s; }
+.top.scrolled { border-color: var(--line); }
+.top .wrap { display: flex; align-items: center; gap: 20px; height: 60px; }
+.brand { display: flex; align-items: center; gap: 10px; font-family: var(--f-display); font-weight: 800; font-size: 20px; text-decoration: none; color: var(--ink); }
+.brand svg { width: 26px; height: 26px; }
+.nav { display: flex; gap: 4px; margin-left: auto; }
+.nav a { text-decoration: none; color: var(--muted); font-size: 14px; font-weight: 500; padding: 6px 10px; border-radius: 8px; transition: color .2s, background .2s; }
+.nav a:hover { color: var(--ink); background: var(--surface-2); }
+.lang { display: flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; background: var(--surface); }
+.lang button { border: 0; background: none; padding: 3px 11px; border-radius: 999px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--muted); transition: background .25s, color .25s; }
+.lang button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+@media (max-width: 860px) { .nav { display: none; } .lang { margin-left: auto; } }
+
+/* ---------- hero ---------- */
+.hero { padding-block: 56px 72px; }
+.hero .wrap { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr); gap: 56px; align-items: center; }
+.hero h1 { font-size: clamp(40px, 6.2vw, 76px); font-weight: 800; margin-top: 18px; }
+.hero h1 .accent { color: var(--copper); }
+.hero h1 .zh { font-family: "Noto Sans SC", var(--f-display); font-weight: 900; letter-spacing: -.02em; }
+.lede { font-size: 18px; color: var(--muted); max-width: 34em; margin-top: 22px; }
+.lede b { color: var(--ink); font-weight: 600; }
+.facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; margin-top: 36px; border-top: 1px solid var(--line); }
+.fact { padding: 16px 16px 0 0; }
+.fact + .fact { padding-left: 16px; border-left: 1px solid var(--line); }
+.fact .k { font-size: 12px; color: var(--muted); font-family: var(--f-mono); letter-spacing: .06em; text-transform: uppercase; }
+.fact .v { font-family: var(--f-display); font-size: 26px; font-weight: 700; margin-top: 2px; }
+.fact .v small { font-size: 14px; color: var(--muted); font-weight: 500; font-family: var(--f-body); }
+.private { display: inline-flex; align-items: center; gap: 8px; margin-top: 28px; font-size: 13.5px; color: var(--muted); background: var(--surface); border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; }
+.private svg { width: 16px; height: 16px; flex: none; color: var(--blue); }
+.load > * { animation: rise .9s var(--ease) both; }
+.load > *:nth-child(2) { animation-delay: .08s; } .load > *:nth-child(3) { animation-delay: .16s; }
+.load > *:nth-child(4) { animation-delay: .24s; } .load > *:nth-child(5) { animation-delay: .32s; }
+@keyframes rise { from { opacity: 0; transform: translateY(18px); } }
+@media (max-width: 900px) { .hero .wrap { grid-template-columns: minmax(0, 1fr); gap: 44px; } .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .fact:nth-child(3) { padding-left: 0; border-left: 0; } }
+
+/* ---------- phone ---------- */
+.stage { display: flex; flex-direction: column; align-items: center; gap: 18px; animation: rise 1s .2s var(--ease) both; }
+.phone { position: relative; width: 300px; max-width: 100%; aspect-ratio: 300 / 620; background: var(--frame); border-radius: 46px; padding: 11px; box-shadow: 0 40px 80px -30px var(--shadow), 0 0 0 1px rgba(255,255,255,.06) inset; }
+.phone::before { content: ""; position: absolute; top: 20px; left: 50%; width: 86px; height: 24px; background: var(--frame); border-radius: 20px; transform: translateX(-50%); z-index: 3; }
+.screen { position: relative; height: 100%; border-radius: 36px; overflow: hidden; background: var(--app-bg); color: var(--app-ink); font-family: "Figtree", system-ui, sans-serif; font-size: 12px; line-height: 1.4; }
+.view { position: absolute; inset: 0; padding: 52px 16px 70px; display: flex; flex-direction: column; gap: 10px; opacity: 0; transform: translateX(24px); transition: opacity .5s var(--ease), transform .6s var(--ease); pointer-events: none; }
+.view.on { opacity: 1; transform: none; pointer-events: auto; }
+.view.off-left { transform: translateX(-24px); }
+.a-head { display: flex; align-items: center; justify-content: space-between; }
+.a-head .hi { font-size: 11px; color: var(--app-muted); }
+.a-head .name { font-weight: 700; font-size: 17px; font-family: "Bricolage Grotesque", sans-serif; }
+.dog { width: 36px; height: 36px; border-radius: 50%; background: var(--app-copper-soft); border: 2px solid var(--app-copper); display: grid; place-items: center; }
+.dog svg { width: 22px; height: 22px; color: var(--app-copper); }
+.a-card { background: var(--app-card); border: 1px solid var(--app-line); border-radius: 18px; padding: 12px; }
+.a-label { font-size: 9.5px; letter-spacing: .1em; font-weight: 700; color: var(--app-muted); text-transform: uppercase; }
+.bal { display: flex; align-items: baseline; justify-content: space-between; }
+.bal .big { font-family: "Bricolage Grotesque", sans-serif; font-weight: 800; font-size: 30px; color: var(--app-ink); }
+.pill { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 999px; background: var(--app-copper-soft); color: var(--app-copper); }
+.pill.g { background: var(--app-green-soft); color: var(--app-green); }
+.prog { display: flex; gap: 12px; align-items: center; }
+.ring { width: 84px; height: 84px; flex: none; position: relative; }
+.ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.ring .t { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; font-weight: 800; font-size: 16px; font-family: "Bricolage Grotesque", sans-serif; line-height: 1; }
+.ring .t small { display: block; font-size: 8px; font-weight: 700; color: var(--app-muted); letter-spacing: .08em; margin-top: 2px; font-family: "Figtree", sans-serif; }
+.rows { flex: 1; display: grid; gap: 7px; }
+.row { display: grid; gap: 3px; }
+.row .l { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--app-muted); }
+.row .l b { color: var(--app-ink); }
+.bar { height: 6px; background: var(--app-track); border-radius: 9px; overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: var(--app-copper); border-radius: 9px; transition: width 1.2s var(--ease); }
+.streak { display: flex; align-items: center; gap: 10px; }
+.flame { width: 34px; height: 34px; border-radius: 11px; background: var(--app-copper-soft); display: grid; place-items: center; color: var(--app-copper); flex: none; }
+.flame svg { width: 18px; height: 18px; }
+.dots7 { display: flex; gap: 4px; margin-top: 5px; }
+.dots7 i { width: 14px; height: 6px; border-radius: 4px; background: var(--app-track); }
+.dots7 i.f { background: var(--app-copper); }
+.a-btn { background: var(--app-copper); color: #fff; border-radius: 14px; text-align: center; font-weight: 700; padding: 11px; font-size: 13px; }
+.a-btn.dark { background: var(--app-ink); }
+.mapbox { position: relative; height: 230px; border-radius: 18px; overflow: hidden; background: var(--app-map); border: 1px solid var(--app-line); }
+.mapbox svg { width: 100%; height: 100%; display: block; }
+.live { position: absolute; top: 10px; left: 10px; background: rgba(38,50,56,.86); color: #fff; border-radius: 999px; padding: 4px 9px; font-size: 10px; font-weight: 700; display: flex; gap: 6px; align-items: center; }
+.live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #88C057; animation: blink 1.4s infinite; }
+@keyframes blink { 50% { opacity: .3; } }
+.stats3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.stats3 div { background: var(--app-card); border: 1px solid var(--app-line); border-radius: 14px; padding: 9px 6px; text-align: center; }
+.stats3 b { display: block; font-family: "Bricolage Grotesque", sans-serif; font-size: 18px; }
+.stats3 span { font-size: 8.5px; letter-spacing: .08em; color: var(--app-muted); font-weight: 700; }
+.hist { display: grid; gap: 6px; }
+.h-item { display: flex; align-items: center; gap: 9px; background: var(--app-card); border: 1px solid var(--app-line); border-radius: 14px; padding: 9px 10px; }
+.h-ico { width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; flex: none; background: var(--app-copper-soft); color: var(--app-copper); }
+.h-ico.g { background: var(--app-green-soft); color: var(--app-green); }
+.h-ico.b { background: #DDE6EE; color: var(--app-blue); }
+.h-ico svg { width: 15px; height: 15px; }
+.h-item .m { flex: 1; min-width: 0; }
+.h-item .m b { display: block; font-size: 11.5px; }
+.h-item .m span { font-size: 9.5px; color: var(--app-muted); }
+.h-item .p { font-weight: 800; font-family: "Bricolage Grotesque", sans-serif; font-size: 14px; color: var(--app-green); }
+.h-item .p.neg { color: var(--app-copper); }
+.seg { display: flex; background: var(--app-track); border-radius: 10px; padding: 3px; font-size: 10.5px; font-weight: 600; }
+.seg span { flex: 1; text-align: center; padding: 4px; border-radius: 8px; color: var(--app-muted); }
+.seg span.on { background: var(--app-card); color: var(--app-ink); }
+.cafe { display: flex; justify-content: space-between; align-items: center; }
+.cafe b { font-size: 13px; }
+.cafe span { font-size: 10px; color: var(--app-muted); }
+.rew { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-top: 1px solid var(--app-line); font-size: 11.5px; }
+.rew .c { font-weight: 700; color: var(--app-copper); }
+.ticket { border: 1.5px dashed var(--app-copper); background: var(--app-copper-soft); border-radius: 16px; padding: 10px 12px; position: relative; overflow: hidden; }
+.ticket .id { font-family: "JetBrains Mono", monospace; font-weight: 600; font-size: 14px; letter-spacing: .08em; }
+.swipe { margin-top: 8px; height: 30px; border-radius: 999px; background: var(--app-card); position: relative; font-size: 10px; color: var(--app-muted); display: grid; place-items: center; font-weight: 600; }
+.swipe i { position: absolute; left: 3px; top: 3px; width: 24px; height: 24px; border-radius: 50%; background: var(--app-copper); animation: slide 2.8s var(--ease) infinite; }
+@keyframes slide { 0%, 15% { left: 3px; } 60%, 75% { left: calc(100% - 27px); } 100% { left: 3px; } }
+.tabbar { position: absolute; left: 0; right: 0; bottom: 0; height: 60px; background: var(--app-card); border-top: 1px solid var(--app-line); display: grid; grid-template-columns: repeat(4, 1fr); padding: 6px 8px 12px; z-index: 2; }
+.tabbar span { display: grid; justify-items: center; gap: 2px; font-size: 9px; font-weight: 600; color: var(--app-muted); transition: color .3s; }
+.tabbar span.on { color: var(--app-copper); }
+.tabbar svg { width: 19px; height: 19px; }
+
+.tour { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+.tour button { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 7px 14px; font-size: 13.5px; font-weight: 600; cursor: pointer; color: var(--muted); position: relative; overflow: hidden; transition: color .25s, border-color .25s; }
+.tour button[aria-selected="true"] { color: var(--copper); border-color: var(--copper); }
+.tour button .tick { position: absolute; left: 0; bottom: 0; height: 2px; width: 0; background: var(--copper); }
+.tour button[aria-selected="true"].auto .tick { animation: tick 5.5s linear forwards; }
+@keyframes tick { to { width: 100%; } }
+.caption { text-align: center; max-width: 340px; min-height: 66px; font-size: 14px; color: var(--muted); }
+.caption b { color: var(--ink); display: block; font-size: 15px; }
+
+/* ---------- sections ---------- */
+section.block { padding-block: 88px; border-top: 1px solid var(--line); }
+.s-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 40px; align-items: end; margin-bottom: 44px; }
+.s-head h2 { font-size: clamp(30px, 4vw, 46px); font-weight: 800; margin-top: 12px; }
+.s-head h2 .zh { font-family: "Noto Sans SC", var(--f-display); font-weight: 900; }
+.s-head p { color: var(--muted); max-width: 36em; }
+@media (max-width: 860px) { .s-head { grid-template-columns: minmax(0, 1fr); gap: 16px; } section.block { padding-block: 64px; } }
+.reveal { transition: transform .9s var(--ease), opacity .9s var(--ease); }
+.reveal.wait { transform: translateY(28px); opacity: .25; }
+
+/* role */
+.role { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.r-card { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 22px; display: flex; flex-direction: column; gap: 10px; transition: transform .35s var(--ease), box-shadow .35s var(--ease); }
+.r-card:hover { transform: translateY(-4px); box-shadow: 0 18px 40px -22px var(--shadow); }
+.r-card .ic { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--copper-soft); color: var(--copper); }
+.r-card .ic svg { width: 22px; height: 22px; }
+.r-card h3 { font-size: 19px; font-weight: 700; }
+.r-card p { font-size: 14.5px; color: var(--muted); }
+.r-card .where { margin-top: auto; font-family: var(--f-mono); font-size: 11.5px; color: var(--blue); word-break: break-word; }
+.team { margin-top: 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; color: var(--muted); font-size: 14.5px; }
+.team b { color: var(--ink); }
+@media (max-width: 960px) { .role { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .role { grid-template-columns: minmax(0, 1fr); } }
+
+/* lab panels */
+.lab { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 20px; }
+@media (max-width: 900px) { .lab { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 22px; padding: 20px; min-width: 0; }
+.panel-top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; justify-content: space-between; margin-bottom: 14px; }
+.ctrl { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn { border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 7px 13px; font-size: 13.5px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: background .2s, border-color .2s, transform .15s; }
+.btn:hover { border-color: var(--muted); }
+.btn:active { transform: scale(.97); }
+.btn.primary { background: var(--copper); border-color: var(--copper); color: #fff; }
+.btn svg { width: 14px; height: 14px; }
+.switch { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; padding: 3px; background: var(--bg); }
+.switch button { border: 0; background: none; padding: 4px 11px; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--muted); transition: background .2s, color .2s; }
+.switch button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px var(--shadow); }
+.sim { position: relative; border-radius: 14px; overflow: hidden; background: var(--bg); border: 1px solid var(--line); }
+.sim svg { display: block; width: 100%; height: auto; }
+.tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--bg); font-size: 12.5px; padding: 7px 10px; border-radius: 9px; line-height: 1.45; max-width: 220px; opacity: 0; transform: translateY(4px); transition: opacity .15s, transform .15s; z-index: 2; }
+.tip.on { opacity: 1; transform: none; }
+.tip .mono { font-size: 11.5px; opacity: .8; }
+.readout { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.readout div { background: var(--bg); border-radius: 12px; padding: 10px 12px; }
+.readout .k { font-size: 12px; color: var(--muted); }
+.readout .v { font-family: var(--f-display); font-weight: 700; font-size: 24px; }
+.readout .v.bad { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--copper); text-decoration-thickness: 2px; }
+.readout .v.good { color: var(--copper); }
+.rules { display: grid; gap: 4px; }
+.rule { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 11px 10px; border-radius: 12px; transition: background .25s; }
+.rule.hl { background: var(--copper-soft); }
+.rule .sw { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; margin-top: 1px; }
+.rule .sw i { width: 10px; height: 10px; border-radius: 50%; display: block; }
+.rule h4 { margin: 0; font-size: 15px; font-weight: 700; }
+.rule p { font-size: 13.5px; color: var(--muted); }
+.rule code { font-family: var(--f-mono); font-size: 12px; color: var(--blue); }
+.rule .cnt { font-family: var(--f-mono); font-size: 13px; font-weight: 600; min-width: 2ch; text-align: right; color: var(--muted); }
+.note { font-size: 13.5px; color: var(--muted); margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line); }
+
+/* points */
+.pts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+@media (max-width: 900px) { .pts { grid-template-columns: minmax(0, 1fr); } }
+.field { display: grid; gap: 8px; margin-bottom: 18px; }
+.field label, .field .lbl { font-weight: 600; font-size: 14.5px; display: flex; justify-content: space-between; gap: 10px; }
+.field label output { font-family: var(--f-mono); color: var(--copper); }
+input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 6px; border-radius: 9px; background: linear-gradient(to right, var(--copper) var(--p, 40%), var(--line) var(--p, 40%)); outline-offset: 6px; }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 22px; height: 22px; border-radius: 50%; background: var(--surface); border: 3px solid var(--copper); cursor: grab; box-shadow: 0 2px 6px var(--shadow); }
+input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: var(--surface); border: 3px solid var(--copper); cursor: grab; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 5px 12px; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: all .2s; }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.toggle { display: flex; align-items: center; gap: 12px; cursor: pointer; font-size: 14.5px; font-weight: 600; }
+.toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.toggle .knob { width: 40px; height: 23px; border-radius: 999px; background: var(--line); position: relative; flex: none; transition: background .25s; }
+.toggle .knob::after { content: ""; position: absolute; top: 3px; left: 3px; width: 17px; height: 17px; border-radius: 50%; background: var(--surface); transition: transform .3s var(--ease); box-shadow: 0 1px 3px var(--shadow); }
+.toggle input:checked + .knob { background: var(--copper); }
+.toggle input:checked + .knob::after { transform: translateX(17px); }
+.toggle input:focus-visible + .knob { outline: 2.5px solid var(--copper); outline-offset: 3px; }
+.toggle small { display: block; font-weight: 400; color: var(--muted); font-size: 13px; }
+.total { display: flex; align-items: baseline; gap: 10px; }
+.total .v { font-family: var(--f-display); font-weight: 800; font-size: 64px; line-height: 1; color: var(--copper); }
+.total .of { font-family: var(--f-mono); color: var(--muted); font-size: 15px; }
+.stack { display: flex; height: 18px; border-radius: 9px; overflow: hidden; background: var(--bg); margin: 18px 0 8px; position: relative; }
+.stack i { display: block; height: 100%; transition: width .6s var(--ease); }
+.stack .w { background: var(--copper); } .stack .g { background: var(--green); } .stack .c { background: var(--blue); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13.5px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.formula { margin-top: 18px; background: var(--bg); border-radius: 12px; padding: 12px 14px; font-family: var(--f-mono); font-size: 13px; overflow-x: auto; white-space: nowrap; }
+.formula .c { color: var(--muted); }
+.formula .h { color: var(--copper); font-weight: 600; }
+.capnote { font-size: 13.5px; color: var(--copper); min-height: 1.6em; margin-top: 6px; font-weight: 600; }
+.extra { margin-top: 20px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.extra div { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+.extra b { font-family: var(--f-display); font-size: 20px; color: var(--blue); }
+.extra span { display: block; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+
+/* sync */
+.flow { background: var(--surface); border: 1px solid var(--line); border-radius: 22px; padding: 22px; overflow-x: auto; }
+.flow svg { display: block; width: 100%; min-width: 680px; height: auto; }
+.flow text { font-family: var(--f-body); }
+.flow .t-mono { font-family: var(--f-mono); }
+.pkt { offset-rotate: 0deg; }
+.guards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 20px; }
+.guard { border-top: 2px solid var(--ink); padding-top: 14px; }
+.guard h3 { font-size: 17px; font-weight: 700; }
+.guard p { font-size: 14px; color: var(--muted); margin-top: 6px; }
+.guard code { font-family: var(--f-mono); font-size: 12px; color: var(--blue); background: var(--blue-soft); padding: 1px 5px; border-radius: 5px; }
+@media (max-width: 900px) { .guards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .guards { grid-template-columns: minmax(0, 1fr); } }
+
+/* engineering */
+.eng { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.e-card { border: 1px solid var(--line); border-radius: 20px; padding: 22px; background: var(--surface); }
+.e-card .big { font-family: var(--f-display); font-weight: 800; font-size: 44px; line-height: 1; color: var(--ink); }
+.e-card .big span { color: var(--copper); }
+.e-card h3 { font-size: 17px; margin-top: 12px; }
+.e-card p { font-size: 14px; color: var(--muted); margin-top: 6px; }
+@media (max-width: 900px) { .eng { grid-template-columns: minmax(0, 1fr); } }
+.stack-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 28px; }
+.stack-list span { font-family: var(--f-mono); font-size: 13px; padding: 6px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface); }
+.stack-list span b { color: var(--copper); font-weight: 600; }
+
+/* timeline */
+.tl { position: relative; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 32px 18px; }
+.tl li::after { content: ""; position: absolute; top: 7px; left: 16px; right: -18px; height: 2px; background: var(--line); }
+.tl li:nth-child(6n)::after, .tl li:last-child::after { right: 0; }
+.tl li { list-style: none; position: relative; padding-top: 26px; font-size: 14px; }
+.tl li::before { content: ""; position: absolute; top: 0; left: 0; width: 16px; height: 16px; border-radius: 50%; background: var(--bg); border: 2px solid var(--line); box-sizing: border-box; z-index: 1; }
+.tl li.me::before { border-color: var(--copper); background: var(--copper); }
+.tl li b { display: block; font-size: 15px; }
+.tl li span { color: var(--muted); }
+.tl li em { font-style: normal; font-size: 11px; font-family: var(--f-mono); color: var(--copper); font-weight: 600; letter-spacing: .06em; }
+.tl-wrap { padding: 0; margin: 0; }
+@media (max-width: 960px) {
+  .tl { grid-template-columns: minmax(0, 1fr); gap: 18px; padding-left: 28px; }
+  .tl li { padding-top: 0; }
+  .tl li::after, .tl li:nth-child(6n)::after { left: -21px; right: auto; top: 19px; bottom: -21px; width: 2px; height: auto; }
+  .tl li:last-child::after { display: none; }
+  .tl li::before { left: -28px; top: 3px; }
+}
+footer { border-top: 1px solid var(--line); padding-block: 40px 56px; color: var(--muted); font-size: 14px; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 12px 30px; justify-content: space-between; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+  .reveal.wait { transform: none; opacity: 1; }
+}
+</style>
+</head>
+<body>
+
+<!-- shared icons -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-paw" viewBox="0 0 24 24"><g fill="currentColor"><ellipse cx="6" cy="10" rx="2.2" ry="2.8"/><ellipse cx="10" cy="5.8" rx="2.2" ry="2.8"/><ellipse cx="14.6" cy="5.8" rx="2.2" ry="2.8"/><ellipse cx="18.4" cy="10" rx="2.2" ry="2.8"/><path d="M12.2 11.2c-3 0-6.2 3.8-6.2 6.3 0 1.9 1.6 2.6 3 2.6 1.3 0 2-.6 3.2-.6s1.9.6 3.2.6c1.4 0 3-.7 3-2.6 0-2.5-3.2-6.3-6.2-6.3z"/></g></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M4 11 12 4l8 7v8.5a.5.5 0 0 1-.5.5H15v-6H9v6H4.5a.5.5 0 0 1-.5-.5z"/></symbol>
+  <symbol id="i-map" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="m3 6 6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14M15 6v14"/></symbol>
+  <symbol id="i-hist" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></g></symbol>
+  <symbol id="i-gift" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3.5" y="8.5" width="17" height="4" rx="1"/><path d="M5 12.5v7h14v-7M12 8.5v11M12 8.5S10.5 4 8 4.5 7 8.5 12 8.5zM12 8.5s1.5-4.5 4-4 1 4-4 4z"/></g></symbol>
+  <symbol id="i-flame" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2c1 3.5 5.5 6 5.5 11a5.5 5.5 0 0 1-11 0c0-2.3 1-3.8 2.2-5 .2 1.6.9 2.7 2.1 3.2C10.200 8 11 5 12 2z"/></symbol>
+  <symbol id="i-walk" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13" cy="4.5" r="1.8"/><path d="m9 21 2.5-6L14 17v4M8 11l3-3.5 3.5 1.5 2 3.5M11.5 15l1-6"/></g></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path fill="currentColor" d="m12 3 2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4 6.7 19.4l1.2-6L3.4 9.3l6-.7z"/></symbol>
+  <symbol id="i-cup" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5zM16 10h1.5a2.5 2.5 0 0 1 0 5H16M8 3v3M12 3v3"/></g></symbol>
+  <symbol id="i-gps" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></g></symbol>
+  <symbol id="i-calc" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M8.5 7.5h7M8.5 12h.01M12 12h.01M15.5 12h.01M8.5 16h.01M12 16h.01M15.5 16h.01"/></g></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 17.8 8.5 4.75 4.75 0 0 1 17.5 18z"/><path d="m9.5 13.5 2 2 3.5-3.5"/></g></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></g></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path fill="currentColor" d="M7 4.5v15l12.5-7.5z"/></symbol>
+</svg>
+
+<header class="top" id="top">
+  <div class="wrap">
+    <a class="brand" href="#hero" aria-label="Vitail">
+      <svg viewBox="0 0 24 24" style="color:var(--copper)"><use href="#i-paw"/></svg>Vitail
+    </a>
+    <nav class="nav" aria-label="Sections">
+      <a href="#role"><span class="zh">我的职责</span><span class="en">My role</span></a>
+      <a href="#gps"><span class="zh">GPS 算法</span><span class="en">GPS</span></a>
+      <a href="#points"><span class="zh">积分引擎</span><span class="en">Points</span></a>
+      <a href="#sync"><span class="zh">云同步</span><span class="en">Sync</span></a>
+      <a href="#eng"><span class="zh">工程实践</span><span class="en">Engineering</span></a>
+    </nav>
+    <div class="lang" role="group" aria-label="Language">
+      <button id="lang-zh" aria-pressed="true">中文</button>
+      <button id="lang-en" aria-pressed="false">EN</button>
+    </div>
+  </div>
+</header>
+
+<main>
+<!-- ================= HERO ================= -->
+<section class="hero" id="hero">
+  <div class="wrap">
+    <div class="load">
+      <div class="eyebrow"><span class="zh">课程团队项目 · Android 应用 · 2026</span><span class="en">Team course project · Android app · 2026</span></div>
+      <h1>
+        <span class="zh">让每一次遛狗<br>都<span class="accent">算数</span>。</span>
+        <span class="en">Make every dog walk <span class="accent">count</span>.</span>
+      </h1>
+      <p class="lede">
+        <span class="zh"><b>Vitail</b> 是一款遛狗记录与激励应用：用真实 GPS 记录每次散步的距离，按规则换算成积分，再到合作咖啡馆兑换咖啡和狗零食。目标是用轻量的游戏化，让主人养成规律遛狗的习惯。</span>
+        <span class="en"><b>Vitail</b> tracks dog walks with real GPS, turns the distance into points under a fixed rule set, and lets owners redeem them for coffee and dog treats at partner cafés. Light gamification to build a daily walking habit.</span>
+      </p>
+      <div class="facts">
+        <div class="fact"><div class="k"><span class="zh">团队</span><span class="en">Team</span></div><div class="v">5 <small><span class="zh">人</span><span class="en">people</span></small></div></div>
+        <div class="fact"><div class="k"><span class="zh">合并 PR</span><span class="en">Merged PRs</span></div><div class="v num">25</div></div>
+        <div class="fact"><div class="k"><span class="zh">自动化测试</span><span class="en">Tests</span></div><div class="v num">106</div></div>
+        <div class="fact"><div class="k"><span class="zh">开发方式</span><span class="en">Process</span></div><div class="v" style="font-size:22px">Agile</div></div>
+      </div>
+      <div class="private">
+        <svg><use href="#i-lock"/></svg>
+        <span class="zh">课程作业，源码不公开。本页用可交互的演示还原核心逻辑。</span>
+        <span class="en">Coursework, so the source is private. This page re-creates the core logic as live demos.</span>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="phone" aria-label="App preview">
+        <div class="screen">
+          <!-- Home -->
+          <div class="view on" data-view="0">
+            <div class="a-head">
+              <div><div class="hi">Good morning</div><div class="name">Alex &amp; Biscuit</div></div>
+              <div class="dog"><svg><use href="#i-paw"/></svg></div>
+            </div>
+            <div class="a-card">
+              <div class="a-label">Points balance</div>
+              <div class="bal"><span class="big num" data-count="1284">1,284</span><span class="pill">+52 today</span></div>
+            </div>
+            <div class="a-card">
+              <div class="a-label" style="margin-bottom:8px">Today's progress</div>
+              <div class="prog">
+                <div class="ring">
+                  <svg viewBox="0 0 84 84"><circle cx="42" cy="42" r="35" fill="none" stroke="var(--app-track)" stroke-width="8"/><circle id="ringArc" cx="42" cy="42" r="35" fill="none" stroke="var(--app-copper)" stroke-width="8" stroke-linecap="round" stroke-dasharray="219.9" stroke-dashoffset="219.9" style="transition:stroke-dashoffset 1.4s var(--ease)"/></svg>
+                  <div class="t"><span>80%<small>OF GOAL</small></span></div>
+                </div>
+                <div class="rows">
+                  <div class="row"><div class="l">Walking <b>3.2 / 4 km</b></div><div class="bar"><i data-w="80%"></i></div></div>
+                  <div class="row"><div class="l">Daily Activity <b>37 / 72</b></div><div class="bar"><i data-w="51%"></i></div></div>
+                </div>
+              </div>
+            </div>
+            <div class="a-card streak">
+              <div class="flame"><svg><use href="#i-flame"/></svg></div>
+              <div style="flex:1">
+                <b style="font-size:13px">5-day streak</b>
+                <div style="font-size:10px;color:var(--app-muted)">2 more days to your 7-day bonus: +20 pts</div>
+                <div class="dots7"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i></div>
+              </div>
+            </div>
+            <div class="a-btn">Start Walk</div>
+          </div>
+          <!-- Walk -->
+          <div class="view" data-view="1">
+            <div class="a-head"><div><div class="hi">Walking with Biscuit</div><div class="name">Track your walk</div></div><div class="dog"><svg><use href="#i-paw"/></svg></div></div>
+            <div class="mapbox">
+              <svg viewBox="0 0 268 230" preserveAspectRatio="xMidYMid slice">
+                <rect width="268" height="230" fill="var(--app-map)"/>
+                <path d="M-10 60 H280 M-10 150 H280 M60 -10 V240 M180 -10 V240 M-10 210 L120 100 L280 20" stroke="var(--app-road)" stroke-width="11" fill="none"/>
+                <rect x="78" y="166" width="86" height="34" rx="6" fill="#D9E2C4"/>
+                <rect x="196" y="76" width="60" height="58" rx="6" fill="#D9E2C4"/>
+                <path id="walkRoute" d="M30 198 C 60 196, 64 158, 60 150 S 110 120, 130 104 S 180 92, 180 60 S 220 40, 238 34" fill="none" stroke="var(--app-copper)" stroke-width="4.5" stroke-linecap="round" stroke-dasharray="400" stroke-dashoffset="400"/>
+                <circle cx="30" cy="198" r="5" fill="var(--app-ink)"/>
+                <g id="walkDot"><circle r="11" fill="var(--app-copper)" opacity=".2"/><circle r="5.5" fill="var(--app-copper)" stroke="#fff" stroke-width="2"/></g>
+              </svg>
+              <div class="live">GPS · ±6 m</div>
+            </div>
+            <div class="stats3">
+              <div><b class="num" id="wKm">0.00</b><span>KILOMETERS</span></div>
+              <div><b class="num" id="wTime">00:00</b><span>MIN:SEC</span></div>
+              <div><b class="num" id="wPts">0</b><span>PTS TODAY</span></div>
+            </div>
+            <div class="a-card" style="padding:9px 12px;font-size:10.5px;color:var(--app-muted)">Walk Tasks · <b style="color:var(--app-ink)">Reach 4 km</b> for +20 pts</div>
+            <div class="a-btn dark">End Walk</div>
+          </div>
+          <!-- History -->
+          <div class="view" data-view="2">
+            <div class="a-head"><div><div class="hi">Points History</div><div class="name">1,284 pts</div></div><div class="dog"><svg><use href="#i-paw"/></svg></div></div>
+            <div class="seg"><span class="on">All</span><span>Earned</span><span>Spent</span></div>
+            <div class="hist">
+              <div class="h-item"><div class="h-ico"><svg><use href="#i-walk"/></svg></div><div class="m"><b>Walk</b><span>22 Oct · Distance 4.1 km</span></div><div class="p">+32</div></div>
+              <div class="h-item"><div class="h-ico g"><svg><use href="#i-star"/></svg></div><div class="m"><b>Daily goal</b><span>22 Oct · 4 km reached</span></div><div class="p">+20</div></div>
+              <div class="h-item"><div class="h-ico b"><svg><use href="#i-cup"/></svg></div><div class="m"><b>Reward claim</b><span>Regular Coffee · Collected</span></div><div class="p neg">−300</div></div>
+              <div class="h-item"><div class="h-ico g"><svg><use href="#i-flame"/></svg></div><div class="m"><b>Streak bonus</b><span>7-day streak</span></div><div class="p">+20</div></div>
+              <div class="h-item"><div class="h-ico"><svg><use href="#i-walk"/></svg></div><div class="m"><b>Walk</b><span>21 Oct · Distance 2.6 km</span></div><div class="p">+20</div></div>
+            </div>
+            <div style="font-size:9.5px;color:var(--app-muted);text-align:center">Earned points are positive; spending is negative.</div>
+          </div>
+          <!-- Rewards -->
+          <div class="view" data-view="3">
+            <div class="a-head"><div><div class="hi">1,284 pts available</div><div class="name">Claim a Reward</div></div><div class="dog"><svg><use href="#i-paw"/></svg></div></div>
+            <div class="a-card">
+              <div class="cafe"><b>Paws &amp; Brew</b><span>0.4 km</span></div>
+              <div class="rew" style="margin-top:6px"><span>Regular Coffee</span><span class="c">300 pts</span></div>
+              <div class="rew"><span>Dog Treat</span><span class="c">180 pts</span></div>
+            </div>
+            <div class="a-card">
+              <div class="cafe"><b>Green Leaf</b><span>0.8 km</span></div>
+              <div class="rew" style="margin-top:6px"><span>Green Tea</span><span class="c">250 pts</span></div>
+            </div>
+            <div class="ticket">
+              <div class="a-label" style="color:var(--app-copper)">Claim ID · ready</div>
+              <div class="id">VT-7K2Q-4M</div>
+              <div class="swipe"><i></i>swipe to collect ›</div>
+            </div>
+          </div>
+          <div class="tabbar" id="tabbar">
+            <span class="on"><svg><use href="#i-home"/></svg>Home</span>
+            <span><svg><use href="#i-map"/></svg>Map</span>
+            <span><svg><use href="#i-hist"/></svg>History</span>
+            <span><svg><use href="#i-gift"/></svg>Rewards</span>
+          </div>
+        </div>
+      </div>
+      <div class="tour" role="tablist" aria-label="App tour">
+        <button role="tab" aria-selected="true" data-tab="0"><span class="zh">首页</span><span class="en">Home</span><i class="tick"></i></button>
+        <button role="tab" aria-selected="false" data-tab="1"><span class="zh">遛狗</span><span class="en">Walk</span><i class="tick"></i></button>
+        <button role="tab" aria-selected="false" data-tab="2"><span class="zh">积分记录</span><span class="en">History</span><i class="tick"></i></button>
+        <button role="tab" aria-selected="false" data-tab="3"><span class="zh">兑换</span><span class="en">Rewards</span><i class="tick"></i></button>
+      </div>
+      <p class="caption" id="caption" aria-live="polite"></p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= ROLE ================= -->
+<section class="block" id="role">
+  <div class="wrap">
+    <div class="s-head reveal">
+      <div>
+        <div class="eyebrow"><span class="zh">我的职责</span><span class="en">My role</span></div>
+        <h2><span class="zh">我负责的是“距离怎么算、积分怎么给、数据怎么存”</span><span class="en">I owned how distance is measured, how points are paid, and where the data lives</span></h2>
+      </div>
+      <p>
+        <span class="zh">五人团队按 Agile 冲刺推进，每个功能走独立分支和 Pull Request 合入。我负责应用最核心的数据链路：从手机传感器到积分余额，再到云端。</span>
+        <span class="en">A five-person team working in Agile sprints, every feature on its own branch and merged by pull request. I owned the app's core data path: from the phone's sensor to the points balance, and on to the cloud.</span>
+      </p>
+    </div>
+    <div class="role">
+      <article class="r-card reveal">
+        <div class="ic"><svg><use href="#i-home"/></svg></div>
+        <h3><span class="zh">首页</span><span class="en">Home screen</span></h3>
+        <p><span class="zh">积分余额、今日目标进度环、Daily Activity 上限、连续打卡卡片，一屏看清今天还差多少。</span><span class="en">Balance, goal ring, Daily Activity cap and streak card: one screen that shows what is left for today.</span></p>
+        <div class="where">MainScreen.js</div>
+      </article>
+      <article class="r-card reveal">
+        <div class="ic"><svg><use href="#i-gps"/></svg></div>
+        <h3><span class="zh">GPS 轨迹与测距</span><span class="en">GPS tracking</span></h3>
+        <p><span class="zh">Haversine 计算距离，并逐点过滤精度差、瞬移、静止漂移和信号中断，防止“原地刷积分”。</span><span class="en">Haversine distance, with each fix filtered for poor accuracy, jumps, stationary drift and signal gaps.</span></p>
+        <div class="where">walkMath.js · walkLocation.js</div>
+      </article>
+      <article class="r-card reveal">
+        <div class="ic"><svg><use href="#i-calc"/></svg></div>
+        <h3><span class="zh">积分规则引擎</span><span class="en">Points engine</span></h3>
+        <p><span class="zh">纯函数实现的积分账本：每日 72 分上限、目标奖励、年度/周期限制，每条拒绝都返回明确原因。</span><span class="en">A pure-function ledger: 72-point daily cap, goal awards, yearly and cycle limits, and a clear reason for every refusal.</span></p>
+        <div class="where">pointsRules.js</div>
+      </article>
+      <article class="r-card reveal">
+        <div class="ic"><svg><use href="#i-cloud"/></svg></div>
+        <h3><span class="zh">Firestore 云同步</span><span class="en">Firestore sync</span></h3>
+        <p><span class="zh">离线优先：先写本地，再按设备合并上云。重复上传结果不变，两台手机互不覆盖。</span><span class="en">Offline-first: write locally, then merge per device. Re-uploading changes nothing and two phones never overwrite each other.</span></p>
+        <div class="where">walkCloudState.js</div>
+      </article>
+    </div>
+    <div class="team reveal">
+      <span><b><span class="zh">另外：</span><span class="en">Also:</span></b> <span class="zh">绘制了项目的动机模型图与领域模型图，用于需求分析。</span><span class="en">drew the project's motivational model and domain model for requirements analysis.</span></span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= GPS ================= -->
+<section class="block" id="gps">
+  <div class="wrap">
+    <div class="s-head reveal">
+      <div>
+        <div class="eyebrow"><span class="zh">核心逻辑 · GPS 测距</span><span class="en">Core logic · GPS distance</span></div>
+        <h2><span class="zh">原始 GPS 会骗人，所以每个点都要过一遍筛子</span><span class="en">Raw GPS lies, so every fix goes through a filter</span></h2>
+      </div>
+      <p>
+        <span class="zh">下面是一段模拟散步：狗停下来闻了会儿东西，中途进了一段没信号的地方，还混进了几个漂移点。把所有点直接连起来会多算不少距离。点击播放，看过滤规则如何逐点处理；鼠标悬停查看每个点的判定原因。</span>
+        <span class="en">A simulated walk: the dog stops to sniff, the signal drops for a stretch, and a few bad fixes slip in. Joining every point overcounts the distance. Press play to see the filter decide fix by fix; hover a point for its reason.</span>
+      </p>
+    </div>
+    <div class="lab">
+      <div class="panel reveal">
+        <div class="panel-top">
+          <div class="ctrl">
+            <button class="btn primary" id="simPlay"><svg><use href="#i-play"/></svg><span class="zh">播放</span><span class="en">Play</span></button>
+          </div>
+          <div class="switch" role="group" aria-label="View">
+            <button id="viewRaw" aria-pressed="false"><span class="zh">直接连线</span><span class="en">Raw</span></button>
+            <button id="viewFilt" aria-pressed="true"><span class="zh">过滤后</span><span class="en">Filtered</span></button>
+          </div>
+        </div>
+        <div class="sim" id="simBox">
+          <svg id="sim" viewBox="0 0 600 340" role="img" aria-label="GPS fixes on a street map"></svg>
+          <div class="tip" id="tip"></div>
+        </div>
+        <div class="readout">
+          <div><div class="k"><span class="zh">直接连线</span><span class="en">Raw sum</span></div><div class="v num bad" id="rRaw">0 m</div></div>
+          <div><div class="k"><span class="zh">过滤后计入</span><span class="en">Counted</span></div><div class="v num good" id="rFilt">0 m</div></div>
+          <div><div class="k"><span class="zh">实际走了</span><span class="en">Actually walked</span></div><div class="v num" id="rTrue">0 m</div></div>
+        </div>
+      </div>
+      <div class="panel reveal">
+        <div class="rules" id="rules"></div>
+        <p class="note">
+          <span class="zh">设计取舍：曾用 GPS 精度半径作为“最小移动距离”，结果每次更新要延迟 10–30 米。改为优先使用设备上报的速度判断静止，只保留 1.2 米的抖动下限，距离更新更跟手。</span>
+          <span class="en">A trade-off: using the accuracy radius as the minimum step delayed updates by 10–30 m. Switching to the device's reported speed for stillness, with a 1.2 m jitter floor, made the distance feel live.</span>
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= POINTS ================= -->
+<section class="block" id="points">
+  <div class="wrap">
+    <div class="s-head reveal">
+      <div>
+        <div class="eyebrow"><span class="zh">核心逻辑 · 积分规则</span><span class="en">Core logic · Points rules</span></div>
+        <h2><span class="zh">奖励要有吸引力，也要有上限</span><span class="en">Rewards that motivate, with a ceiling</span></h2>
+      </div>
+      <p>
+        <span class="zh">积分能换真实的咖啡，规则必须防刷又好理解。每天按当日累计 GPS 距离计分，同一天多次散步合并计算，跨天不叠加。拖动滑块试试。</span>
+        <span class="en">Points buy real coffee, so the rules must resist farming and still be easy to grasp. Points come from the day's total GPS distance; walks on the same day add up, different days don't. Drag the slider.</span>
+      </p>
+    </div>
+    <div class="pts">
+      <div class="panel reveal">
+        <div class="field">
+          <label for="km"><span><span class="zh">今天累计步行距离</span><span class="en">Distance walked today</span></span><output id="kmOut" class="num">3.2 km</output></label>
+          <input type="range" id="km" min="0" max="8" step="0.1" value="3.2">
+        </div>
+        <div class="field">
+          <div class="lbl"><span class="zh">个人每日目标</span><span class="en">Personal daily goal</span></div>
+          <div class="chips" id="goalChips" role="group" aria-label="Goal">
+            <button class="chip" data-g="2" aria-pressed="false">2 km</button>
+            <button class="chip" data-g="3" aria-pressed="false">3 km</button>
+            <button class="chip" data-g="4" aria-pressed="true">4 km</button>
+            <button class="chip" data-g="5" aria-pressed="false">5 km</button>
+          </div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="venue">
+          <span class="knob"></span>
+          <span><span class="zh">在合作场地完成地理围栏签到</span><span class="en">Verified venue check-in</span><small><span class="zh">需要新鲜、精确且位于场地半径内的定位</span><span class="en">Needs a fresh, accurate fix inside the venue radius</span></small></span>
+        </label>
+        <div class="formula" id="formula"></div>
+      </div>
+      <div class="panel reveal">
+        <div class="eyebrow" style="color:var(--muted)">Daily Activity</div>
+        <div class="total" style="margin-top:6px"><span class="v num" id="ptTotal">25</span><span class="of">/ 72 pts</span></div>
+        <div class="stack" aria-hidden="true"><i class="w" id="sW"></i><i class="g" id="sG"></i><i class="c" id="sC"></i></div>
+        <div class="legend">
+          <span><i style="background:var(--copper)"></i><span class="zh">步行</span><span class="en">Walking</span> <b class="num" id="lW">25</b>/40</span>
+          <span><i style="background:var(--green)"></i><span class="zh">达成目标</span><span class="en">Goal met</span> <b class="num" id="lG">0</b>/20</span>
+          <span><i style="background:var(--blue)"></i><span class="zh">场地签到</span><span class="en">Check-in</span> <b class="num" id="lC">0</b>/12</span>
+        </div>
+        <div class="capnote" id="capNote"></div>
+        <div class="eyebrow" style="color:var(--muted);margin-top:16px"><span class="zh">不占每日上限的奖励</span><span class="en">Outside the daily cap</span></div>
+        <div class="extra">
+          <div><b>+20</b><span><span class="zh">连续 7 天达标，每个账户一次</span><span class="en">7-day streak, once per account</span></span></div>
+          <div><b>+100</b><span><span class="zh">连续 30 天达标，每个账户一次</span><span class="en">30-day streak, once per account</span></span></div>
+          <div><b>+200</b><span><span class="zh">兽医检查，每年最多 2 次，间隔 ≥ 60 天</span><span class="en">Vet check, max 2 a year, 60+ days apart</span></span></div>
+          <div><b>+300</b><span><span class="zh">市政宠物登记，每个登记周期一次</span><span class="en">Council registration, once per cycle</span></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= SYNC ================= -->
+<section class="block" id="sync">
+  <div class="wrap">
+    <div class="s-head reveal">
+      <div>
+        <div class="eyebrow"><span class="zh">数据与安全 · Firestore</span><span class="en">Data &amp; security · Firestore</span></div>
+        <h2><span class="zh">离线也能记，上云不会乱，改日期刷不了分</span><span class="en">Works offline, merges cleanly, can't be gamed by changing the date</span></h2>
+      </div>
+      <p>
+        <span class="zh">遛狗常在信号差的公园里。每台手机记录自己当天走了多少（只增不减），云端按“设备 × 日期”保存各自的累计值。这样同一份数据上传两次不会翻倍，两台手机同时登录也不会互相覆盖。</span>
+        <span class="en">Walks often happen in parks with weak signal. Each phone records how far it walked each day (it only grows), and the cloud keeps that running total per device per day. Uploading twice can't double it, and two signed-in phones never overwrite each other.</span>
+      </p>
+    </div>
+    <div class="flow reveal">
+      <svg viewBox="0 0 900 270" role="img" aria-label="Sync flow from two phones to Firestore">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="var(--muted)"/></marker>
+        </defs>
+        <!-- phones -->
+        <g>
+          <rect x="10" y="20" width="200" height="100" rx="16" fill="var(--bg)" stroke="var(--line)"/>
+          <text x="28" y="48" font-size="14" font-weight="700" fill="var(--ink)"><tspan class="zh">手机 A · 离线记录</tspan><tspan class="en">Phone A · offline</tspan></text>
+          <text x="28" y="76" class="t-mono" font-size="12.5" fill="var(--muted)">2026-10-22 → 2,140 m</text>
+          <text x="28" y="98" class="t-mono" font-size="12.5" fill="var(--muted)">2026-10-21 → 2,600 m</text>
+          <rect x="10" y="150" width="200" height="100" rx="16" fill="var(--bg)" stroke="var(--line)"/>
+          <text x="28" y="178" font-size="14" font-weight="700" fill="var(--ink)"><tspan class="zh">手机 B · 同一账户</tspan><tspan class="en">Phone B · same account</tspan></text>
+          <text x="28" y="206" class="t-mono" font-size="12.5" fill="var(--muted)">2026-10-22 → 1,960 m</text>
+          <text x="28" y="228" class="t-mono" font-size="12.5" fill="var(--muted)">AsyncStorage journal</text>
+        </g>
+        <!-- merge -->
+        <path d="M212 70 C 270 70, 270 135, 318 135" fill="none" stroke="var(--line)" stroke-width="2" marker-end="url(#ar)"/>
+        <path d="M212 200 C 270 200, 270 135, 318 135" fill="none" stroke="var(--line)" stroke-width="2" marker-end="url(#ar)"/>
+        <rect x="322" y="85" width="230" height="100" rx="16" fill="var(--copper-soft)" stroke="var(--copper)"/>
+        <text x="340" y="113" font-size="14" font-weight="700" fill="var(--ink)"><tspan class="zh">按设备合并（取较大值）</tspan><tspan class="en">Merge per device (take max)</tspan></text>
+        <text x="340" y="140" class="t-mono" font-size="12" fill="var(--copper)">cloud[day][device] =</text>
+        <text x="340" y="160" class="t-mono" font-size="12" fill="var(--copper)">  max(cloud, local)</text>
+        <path d="M554 135 L 628 135" fill="none" stroke="var(--line)" stroke-width="2" marker-end="url(#ar)"/>
+        <!-- firestore -->
+        <rect x="632" y="30" width="258" height="210" rx="16" fill="var(--blue-soft)" stroke="var(--blue)"/>
+        <text x="650" y="58" font-size="14" font-weight="700" fill="var(--ink)">Firestore</text>
+        <text x="650" y="80" class="t-mono" font-size="11.5" fill="var(--blue)">users/{uid}/walkState/summary</text>
+        <text x="650" y="112" class="t-mono" font-size="12" fill="var(--muted)">10-22: A 2,140 + B 1,960</text>
+        <text x="650" y="134" class="t-mono" font-size="12" fill="var(--ink)" font-weight="600">      = 4,100 m → 32 pts</text>
+        <line x1="650" y1="152" x2="872" y2="152" stroke="var(--blue)" stroke-opacity=".3"/>
+        <text x="650" y="178" font-size="12.5" fill="var(--muted)"><tspan class="zh">安全规则在服务端校验</tspan><tspan class="en">Security rules check on the server</tspan></text>
+        <text x="650" y="200" font-size="12.5" fill="var(--muted)"><tspan class="zh">积分 = 距离换算，单日 ≤ 60 km</tspan><tspan class="en">points match distance, day ≤ 60 km</tspan></text>
+        <text x="650" y="222" font-size="12.5" fill="var(--muted)"><tspan class="zh">仅今天和前 2 天可写</tspan><tspan class="en">only today and 2 days back writable</tspan></text>
+        <!-- packets -->
+        <circle class="pkt" r="5" fill="var(--copper)" style="offset-path:path('M212 70 C 270 70, 270 135, 318 135 L 628 135');animation:fly 3.2s var(--ease) infinite"/>
+        <circle class="pkt" r="5" fill="var(--copper)" style="offset-path:path('M212 200 C 270 200, 270 135, 318 135 L 628 135');animation:fly 3.2s 1.6s var(--ease) infinite"/>
+      </svg>
+      <style>@keyframes fly { 0% { offset-distance: 0%; opacity: 0; } 10% { opacity: 1; } 85% { opacity: 1; } 100% { offset-distance: 100%; opacity: 0; } }</style>
+    </div>
+    <div class="guards">
+      <div class="guard reveal">
+        <h3><span class="zh">服务器时钟</span><span class="en">Server clock</span></h3>
+        <p><span class="zh">只允许修改今天及前 2 天的记录，以服务器时间为准，改手机日期无法补录旧日子。</span><span class="en">Only today and the 2 days before can change, by the server's time, so editing the phone's date can't back-fill old days.</span></p>
+      </div>
+      <div class="guard reveal">
+        <h3><span class="zh">固定 ID 的奖励</span><span class="en">Fixed award IDs</span></h3>
+        <p><span class="zh">每笔奖励是独立记录，如 <code>goal:2026-10-22</code>、<code>streak:7</code>，金额固定，无法重复或放大。</span><span class="en">Each award is its own record, like <code>goal:2026-10-22</code> or <code>streak:7</code>, with a fixed amount, so it can't repeat or inflate.</span></p>
+      </div>
+      <div class="guard reveal">
+        <h3><span class="zh">兑换不透支</span><span class="en">No overspending</span></h3>
+        <p><span class="zh">兑换价格必须与奖励表一致，余额不能为负；领取状态只能从 ready 变为 collected 一次。</span><span class="en">Claims must match the reward price and can't push the balance below zero; a claim moves from ready to collected once.</span></p>
+      </div>
+      <div class="guard reveal">
+        <h3><span class="zh">诚实的边界</span><span class="en">Known limit</span></h3>
+        <p><span class="zh">规则无法判断 GPS 本身是否被伪造。这需要后端或 App Check，已记录为后续工作。</span><span class="en">The rules can't tell if the GPS itself is spoofed. That needs a backend or App Check, logged as future work.</span></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= ENGINEERING ================= -->
+<section class="block" id="eng">
+  <div class="wrap">
+    <div class="s-head reveal">
+      <div>
+        <div class="eyebrow"><span class="zh">工程实践</span><span class="en">Engineering</span></div>
+        <h2><span class="zh">核心逻辑写成纯函数，再用测试钉住</span><span class="en">Core logic as pure functions, pinned down by tests</span></h2>
+      </div>
+      <p>
+        <span class="zh">测距、积分、同步合并都与 UI 解耦，可以不启动 App 直接用 Node 测试运行器验证。真实设备上的问题，则针对性地做兼容处理。</span>
+        <span class="en">Distance, points and sync merging are decoupled from the UI, so they run under Node's test runner without launching the app. Real-device issues got targeted fixes.</span>
+      </p>
+    </div>
+    <div class="eng">
+      <div class="e-card reveal">
+        <div class="big num" data-count="87">87</div>
+        <h3><span class="zh">单元测试</span><span class="en">Unit tests</span></h3>
+        <p><span class="zh">覆盖 Haversine 距离、GPS 过滤、暂停计时、跨午夜分段、积分上限、同步合并的幂等性等。</span><span class="en">Haversine, GPS filtering, pause timing, midnight splits, the points cap, idempotent sync merges and more.</span></p>
+      </div>
+      <div class="e-card reveal">
+        <div class="big num" data-count="19">19</div>
+        <h3><span class="zh">安全规则测试</span><span class="en">Security-rule tests</span></h3>
+        <p><span class="zh">在本地 Firebase 模拟器上运行，逐条验证“改日期、重复领奖、透支”等作弊路径会被拒绝。</span><span class="en">Run on the local Firebase emulator, checking that back-dating, duplicate awards and overspending are refused.</span></p>
+      </div>
+      <div class="e-card reveal">
+        <div class="big"><span>HMS</span></div>
+        <h3><span class="zh">无谷歌服务的设备</span><span class="en">Phones without Google services</span></h3>
+        <p><span class="zh">华为等设备上定位服务报错时，自动切换到 WebView 地理定位继续采集真实 GPS，不用模拟路线兜底。</span><span class="en">On Huawei and similar phones, a location-service failure falls back to WebView geolocation, still real GPS and never a simulated route.</span></p>
+      </div>
+    </div>
+    <div class="stack-list reveal">
+      <span><b>React Native</b> 0.86 · Expo</span>
+      <span><b>Firebase</b> Auth + Firestore</span>
+      <span><b>Leaflet</b> + OpenStreetMap · WebView</span>
+      <span><b>expo-location</b> · expo-sensors</span>
+      <span><b>AsyncStorage</b> offline journal</span>
+      <span><b>node:test</b> · Firestore emulator</span>
+      <span><b>Open-Meteo</b> weather</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= TIMELINE ================= -->
+<section class="block" id="timeline">
+  <div class="wrap">
+    <div class="s-head reveal">
+      <div>
+        <div class="eyebrow"><span class="zh">开发历程</span><span class="en">How it was built</span></div>
+        <h2><span class="zh">从脚手架到防作弊规则</span><span class="en">From scaffold to anti-cheat rules</span></h2>
+      </div>
+      <p><span class="zh">按提交历史整理的主要迭代。实心节点是我主导的部分。</span><span class="en">Major iterations, from the commit history. Filled dots are the parts I led.</span></p>
+    </div>
+    <ol class="tl tl-wrap" id="tl">
+      <li class="reveal"><b><span class="zh">脚手架与登录</span><span class="en">Scaffold &amp; login</span></b><span>Expo · Firebase Auth</span></li>
+      <li class="me reveal"><em><span class="zh">我</span><span class="en">ME</span></em><b><span class="zh">GPS 与积分计算</span><span class="en">GPS &amp; points</span></b><span><span class="zh">首页、测距、计分</span><span class="en">Home, distance, scoring</span></span></li>
+      <li class="reveal"><b><span class="zh">狗狗档案</span><span class="en">Dog profile</span></b><span><span class="zh">新用户引导</span><span class="en">Onboarding</span></span></li>
+      <li class="reveal"><b><span class="zh">咖啡馆兑换</span><span class="en">Café rewards</span></b><span><span class="zh">选店与奖励</span><span class="en">Pick café &amp; reward</span></span></li>
+      <li class="reveal"><b><span class="zh">推荐每日目标</span><span class="en">Recommended goal</span></b><span><span class="zh">按品种、年龄、体型</span><span class="en">By breed, age, size</span></span></li>
+      <li class="me reveal"><em><span class="zh">我</span><span class="en">ME</span></em><b><span class="zh">离线优先云同步</span><span class="en">Offline-first sync</span></b><span>Firestore</span></li>
+      <li class="reveal"><b><span class="zh">积分账本</span><span class="en">Points ledger</span></b><span><span class="zh">72 分上限、实时地图</span><span class="en">72 cap, live map</span></span></li>
+      <li class="reveal"><b><span class="zh">消费与领取</span><span class="en">Spend &amp; collect</span></b><span><span class="zh">领取 ID、滑动核销</span><span class="en">Claim IDs, swipe</span></span></li>
+      <li class="reveal"><b><span class="zh">连续打卡奖励</span><span class="en">Streak bonuses</span></b><span>7 / 30 days</span></li>
+      <li class="reveal"><b><span class="zh">防作弊安全规则</span><span class="en">Anti-cheat rules</span></b><span>Firestore Rules</span></li>
+      <li class="reveal"><b><span class="zh">账户管理</span><span class="en">Account tools</span></b><span><span class="zh">重置/修改密码、注销</span><span class="en">Reset, change, delete</span></span></li>
+      <li class="me reveal"><em><span class="zh">我</span><span class="en">ME</span></em><b><span class="zh">积分记录页修复</span><span class="en">History page fixes</span></b><span><span class="zh">问题修复与排版更新</span><span class="en">Fixes and layout update</span></span></li>
+    </ol>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Vitail · <span class="zh">IT Project 课程团队作品</span><span class="en">IT Project team coursework</span></span>
+    <span><span class="zh">页面中的界面与数据为演示用途重新绘制</span><span class="en">Screens and figures on this page are re-drawn for demonstration</span></span>
+  </div>
+</footer>
+
+<script>
+(() => {
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const isEn = () => document.body.classList.contains('en');
+  const T = (zh, en) => isEn() ? en : zh;
+  const fmt = (n) => Math.round(n).toLocaleString('en-US');
+  const listeners = [];
+
+  /* ---------- language ---------- */
+  function setLang(en) {
+    document.body.classList.toggle('en', en);
+    document.documentElement.lang = en ? 'en' : 'zh-CN';
+    $('#lang-zh').setAttribute('aria-pressed', String(!en));
+    $('#lang-en').setAttribute('aria-pressed', String(en));
+    try { localStorage.setItem('vitail-lang', en ? 'en' : 'zh'); } catch (e) {}
+    listeners.forEach((f) => f());
+  }
+  $('#lang-zh').onclick = () => setLang(false);
+  $('#lang-en').onclick = () => setLang(true);
+  let saved = null; try { saved = localStorage.getItem('vitail-lang'); } catch (e) {}
+  if (saved === 'en') setLang(true); else document.documentElement.lang = 'zh-CN';
+
+  addEventListener('scroll', () => $('#top').classList.toggle('scrolled', scrollY > 8), { passive: true });
+
+  /* ---------- phone tour ---------- */
+  const captions = [
+    ['首页', '余额、今日进度和连续打卡一屏呈现，完成目标还差多少一眼可见。', 'Home', 'Balance, today\'s progress and streak on one screen, so the gap to the goal is obvious.'],
+    ['遛狗', '实时 GPS 记录路线、距离与用时；同一天多次散步自动累计。', 'Walk', 'Live GPS draws the route, distance and time; several walks on one day add up.'],
+    ['积分记录', '每笔收入与支出都可追溯，支持按类型、日期和积分范围筛选。', 'History', 'Every point earned or spent is traceable, filterable by type, date and amount.'],
+    ['兑换', '选择附近咖啡馆的奖励，生成领取 ID，到店滑动核销。', 'Rewards', 'Pick a reward at a nearby café, get a claim ID, swipe to collect at the counter.'],
+  ];
+  const views = $$('.view'), tabs = $$('.tour button'), bar = $$('#tabbar span');
+  let cur = 0, auto = !reduce, timer = null, walkRaf = null;
+  function renderCaption() {
+    const c = captions[cur];
+    $('#caption').innerHTML = `<b>${T(c[0], c[2])}</b>${T(c[1], c[3])}`;
+  }
+  function show(i) {
+    views.forEach((v, k) => { v.classList.toggle('on', k === i); v.classList.toggle('off-left', k < i); });
+    tabs.forEach((b, k) => { b.setAttribute('aria-selected', String(k === i)); b.classList.toggle('auto', auto); });
+    bar.forEach((b, k) => b.classList.toggle('on', k === i));
+    // restart the tick animation
+    tabs.forEach((b) => { const t = b.querySelector('.tick'); t.style.animation = 'none'; t.offsetWidth; t.style.animation = ''; });
+    cur = i; renderCaption();
+    if (i === 0) animateHome();
+    if (i === 1) animateWalk(); else cancelAnimationFrame(walkRaf);
+    clearTimeout(timer);
+    if (auto) timer = setTimeout(() => show((cur + 1) % 4), 5500);
+  }
+  tabs.forEach((b, k) => b.onclick = () => { auto = false; show(k); });
+  listeners.push(renderCaption);
+
+  function animateHome() {
+    const arc = $('#ringArc');
+    arc.style.transition = 'none'; arc.style.strokeDashoffset = 219.9; arc.getBoundingClientRect();
+    arc.style.transition = ''; requestAnimationFrame(() => arc.style.strokeDashoffset = 219.9 * 0.2);
+    $$('.view[data-view="0"] .bar i').forEach((b) => { b.style.transition = 'none'; b.style.width = 0; b.offsetWidth; b.style.transition = ''; requestAnimationFrame(() => b.style.width = b.dataset.w); });
+    countUp($('.view[data-view="0"] [data-count]'), 1284, 1100);
+  }
+  function animateWalk() {
+    const route = $('#walkRoute'), dot = $('#walkDot'), len = route.getTotalLength();
+    route.style.strokeDasharray = len;
+    const dur = reduce ? 1 : 4800, t0 = performance.now();
+    cancelAnimationFrame(walkRaf);
+    const step = (now) => {
+      const p = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - p, 2);
+      route.style.strokeDashoffset = len * (1 - e);
+      const pt = route.getPointAtLength(len * e);
+      dot.setAttribute('transform', `translate(${pt.x} ${pt.y})`);
+      const km = 1.86 * e, sec = Math.round(1453 * e);
+      $('#wKm').textContent = km.toFixed(2);
+      $('#wTime').textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
+      // walking points use the day's total: 1.34 km earlier today + this walk
+      $('#wPts').textContent = Math.floor(Math.min(5000, (1.34 + km) * 1000) * 8 / 1000);
+      if (p < 1) walkRaf = requestAnimationFrame(step);
+    };
+    walkRaf = requestAnimationFrame(step);
+  }
+  function countUp(el, to, dur) {
+    if (!el) return;
+    if (reduce) { el.textContent = fmt(to); return; }
+    const t0 = performance.now();
+    const step = (now) => { const p = Math.min(1, (now - t0) / dur); el.textContent = fmt(to * (1 - Math.pow(1 - p, 3))); if (p < 1) requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  }
+  show(0);
+
+  /* ---------- GPS simulator (same rules as walkMath.measureSegment) ---------- */
+  const M_PER_PX = 0.4, STEP_S = 3, SPEED = 1.4;
+  const WP = [[38, 292], [120, 286], [182, 236], [252, 214], [318, 236], [392, 204], [440, 140], [506, 112], [566, 58]];
+  const segs = []; let routeLen = 0;
+  for (let i = 1; i < WP.length; i++) { const [a, b] = [WP[i - 1], WP[i]]; const l = Math.hypot(b[0] - a[0], b[1] - a[1]); segs.push({ a, b, l, s: routeLen }); routeLen += l; }
+  const at = (d) => { d = Math.max(0, Math.min(routeLen, d)); const s = segs.find((g) => d <= g.s + g.l) || segs[segs.length - 1]; const f = (d - s.s) / s.l; const dx = (s.b[0] - s.a[0]) / s.l, dy = (s.b[1] - s.a[1]) / s.l; return { x: s.a[0] + dx * (d - s.s), y: s.a[1] + dy * (d - s.s), nx: -dy, ny: dx }; };
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const pxStep = SPEED * STEP_S / M_PER_PX;
+  const fixes = []; let d = 0, t = 0, trueM = 0;
+  for (let i = 0; i < 64 && d <= routeLen; i++) {
+    let p = at(d), acc = 5 + rnd() * 9, speed = SPEED + (rnd() - .5) * .3, x = p.x + (rnd() - .5) * 3, y = p.y + (rnd() - .5) * 3, kind = null;
+    if (i === 9 || i === 10) { x = p.x + p.nx * (i === 9 ? 62 : -70); y = p.y + p.ny * (i === 9 ? 62 : -70); acc = i === 9 ? 48 : 61; kind = 'acc'; }
+    if (i === 19) { x = p.x + 14; y = p.y - 150; acc = 11; kind = 'jump'; }
+    if (i >= 28 && i <= 34) { const q = at(d); x = q.x + (rnd() - .5) * 8; y = q.y + (rnd() - .5) * 8; speed = 0.1 + rnd() * .1; }
+    fixes.push({ i, x, y, t, acc, speed, kind });
+    const still = i >= 28 && i < 34;
+    if (i === 41) { t += 45; d += pxStep * 5; trueM += pxStep * 5 * M_PER_PX; }   // signal lost for 45 s
+    else { t += STEP_S; if (!still) { d += pxStep; trueM += pxStep * M_PER_PX; } }
+  }
+  const trueTotal = Math.min(trueM, routeLen * M_PER_PX);
+  const dist = (a, b) => Math.hypot(b.x - a.x, b.y - a.y) * M_PER_PX;
+  // run the filter once
+  let anchor = null;
+  fixes.forEach((f, k) => {
+    const prev = fixes[k - 1];
+    f.raw = prev ? dist(prev, f) : 0;
+    if (f.acc > 30) { f.res = 'acc'; f.m = 0; return; }
+    if (!anchor) { anchor = f; f.res = 'start'; f.m = 0; return; }
+    const s = f.t - anchor.t, m = dist(anchor, f);
+    if (s > 30) { f.res = 'gap'; f.m = 0; anchor = f; return; }
+    if (m / s > 3.5) { f.res = 'jump'; f.m = 0; anchor = f; return; }
+    if (f.speed < 0.3) { f.res = 'still'; f.m = 0; anchor = f; return; }
+    if (m < 1.2) { f.res = 'jitter'; f.m = 0; return; }
+    f.res = 'ok'; f.m = m; f.from = anchor; anchor = f;
+  });
+  const RULES = [
+    { id: 'acc', c: 'var(--muted)', zh: ['精度差', '精度半径超过 30 米，或定位已超过 30 秒，直接丢弃。'], en: ['Poor accuracy', 'Accuracy worse than 30 m, or older than 30 s: dropped.'], code: 'accuracy ≤ 30' },
+    { id: 'jump', c: 'var(--blue)', zh: ['瞬移', '与上个点之间速度超过 3.5 m/s（远超步行），不计距离并重置锚点。'], en: ['Jump', 'Faster than 3.5 m/s from the last point (not walking): no distance, anchor resets.'], code: 'm / s > 3.5' },
+    { id: 'still', c: 'var(--green)', zh: ['静止漂移', '设备报告速度低于 0.3 m/s，说明人和狗停着，抖动不计入。'], en: ['Standing still', 'Reported speed under 0.3 m/s means standing still; drift is ignored.'], code: 'speed < 0.3' },
+    { id: 'gap', c: '#B08A2E', zh: ['信号中断', '两点间隔超过 30 秒，不凭空连一条直线补距离。'], en: ['Signal gap', 'More than 30 s between fixes: no invented straight line.'], code: 'Δt > 30 s' },
+    { id: 'ok', c: 'var(--copper)', zh: ['计入', '通过全部检查，与锚点的距离大于 1.2 米抖动下限，计入当天里程。'], en: ['Counted', 'Passes every check and moved over the 1.2 m jitter floor: added to today.'], code: 'm ≥ 1.2' },
+  ];
+  const ruleOf = (r) => RULES.find((x) => x.id === r) || RULES[4];
+  function renderRules() {
+    $('#rules').innerHTML = RULES.map((r) => `<div class="rule" data-r="${r.id}"><span class="sw" style="background:color-mix(in srgb, ${r.c} 18%, transparent)"><i style="background:${r.c}"></i></span><div><h4>${isEn() ? r.en[0] : r.zh[0]} <code>${r.code}</code></h4><p>${isEn() ? r.en[1] : r.zh[1]}</p></div><span class="cnt num" data-cnt="${r.id}">0</span></div>`).join('');
+    updateCounts(shown);
+  }
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = $('#sim');
+  const el = (n, a, p = svg) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); p.appendChild(e); return e; };
+  // streets
+  el('rect', { width: 600, height: 340, fill: 'var(--bg)' });
+  const streets = el('g', { stroke: 'var(--street)', 'stroke-width': 16, fill: 'none', 'stroke-linecap': 'round' });
+  ['M0 300 H600', 'M0 120 H600', 'M150 0 V340', 'M330 0 V340', 'M480 0 V340', 'M0 210 L600 30'].forEach((dd) => el('path', { d: dd }, streets));
+  el('rect', { x: 196, y: 140, width: 100, height: 50, rx: 10, fill: 'color-mix(in srgb, var(--green) 16%, transparent)' });
+  el('text', { x: 246, y: 170, 'text-anchor': 'middle', 'font-size': 12, fill: 'var(--green-ink)', 'font-family': 'Figtree, sans-serif' }).textContent = 'Park';
+  // true route (dashed) and scale bar
+  el('path', { d: 'M' + WP.map((p) => p.join(' ')).join(' L'), fill: 'none', stroke: 'var(--muted)', 'stroke-opacity': .35, 'stroke-width': 1.5, 'stroke-dasharray': '3 5' });
+  el('line', { x1: 20, y1: 326, x2: 70, y2: 326, stroke: 'var(--muted)', 'stroke-width': 2 });
+  el('text', { x: 76, y: 330, 'font-size': 11, fill: 'var(--muted)', 'font-family': 'JetBrains Mono, monospace' }).textContent = '20 m';
+  const lines = el('g', {}), marks = el('g', {});
+  // gap and stationary labels
+  const lab = el('g', { 'font-size': 11, 'font-family': 'Figtree, Noto Sans SC, sans-serif', fill: 'var(--muted)' });
+  const sitAt = fixes[28], gapA = fixes[41];
+  const labSit = el('text', { x: sitAt.x + 14, y: sitAt.y + 30 }, lab), labGap = el('text', { x: gapA.x + 10, y: gapA.y - 22 }, lab);
+  function renderLabels() { labSit.textContent = T('停下闻 18 秒', 'sniffing, 18 s'); labGap.textContent = T('无信号 45 秒', 'no signal, 45 s'); }
+  fixes.forEach((f) => {
+    const r = ruleOf(f.res === 'start' ? 'ok' : f.res === 'jitter' ? 'still' : f.res);
+    f.g = el('g', { class: 'fx', style: 'cursor:pointer;opacity:0;transition:opacity .25s' }, marks);
+    if (f.res === 'acc') el('circle', { cx: f.x, cy: f.y, r: Math.min(46, f.acc / M_PER_PX / 3), fill: 'var(--muted)', 'fill-opacity': .08, stroke: 'var(--muted)', 'stroke-opacity': .3, 'stroke-dasharray': '2 3' }, f.g);
+    el('circle', { cx: f.x, cy: f.y, r: 9, fill: 'transparent' }, f.g);
+    el('circle', { cx: f.x, cy: f.y, r: f.res === 'ok' || f.res === 'start' ? 3.6 : 4, fill: f.res === 'ok' || f.res === 'start' ? r.c : 'var(--bg)', stroke: r.c, 'stroke-width': 2 }, f.g);
+    f.rawLine = f.i > 0 ? el('line', { x1: fixes[f.i - 1].x, y1: fixes[f.i - 1].y, x2: f.x, y2: f.y, stroke: 'var(--muted)', 'stroke-width': 1.4, opacity: 0 }, lines) : null;
+    f.okLine = f.res === 'ok' ? el('line', { x1: f.from.x, y1: f.from.y, x2: f.x, y2: f.y, stroke: 'var(--copper)', 'stroke-width': 3, 'stroke-linecap': 'round', opacity: 0 }, lines) : null;
+    f.g.addEventListener('mouseenter', () => tipFor(f));
+    f.g.addEventListener('mouseleave', () => $('#tip').classList.remove('on'));
+    f.g.addEventListener('click', () => tipFor(f));
+  });
+  function reasonText(f) {
+    const m = { start: ['起点，设为锚点', 'Start, set as anchor'], acc: ['丢弃：精度 ' + Math.round(f.acc) + ' m > 30 m', 'Dropped: accuracy ' + Math.round(f.acc) + ' m > 30 m'],
+      jump: ['丢弃：速度异常，重置锚点', 'Dropped: impossible speed, anchor reset'], still: ['不计：设备速度 ' + f.speed.toFixed(2) + ' m/s，静止', 'Ignored: device speed ' + f.speed.toFixed(2) + ' m/s, still'],
+      jitter: ['不计：移动不足 1.2 m', 'Ignored: under 1.2 m'], gap: ['不计：距上一有效点超过 30 s', 'Ignored: over 30 s since last fix'], ok: ['计入 +' + f.m.toFixed(1) + ' m', 'Counted +' + f.m.toFixed(1) + ' m'] }[f.res];
+    return T(m[0], m[1]);
+  }
+  function tipFor(f) {
+    const tip = $('#tip'), box = $('#simBox').getBoundingClientRect(), k = box.width / 600;
+    tip.innerHTML = `<div class="mono">#${f.i} · t=${f.t}s · ±${Math.round(f.acc)} m</div>${reasonText(f)}`;
+    let x = f.x * k + 12, y = f.y * k - 10;
+    tip.classList.add('on');
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    if (x + w > box.width - 6) x = f.x * k - w - 12;
+    if (y + h > box.height - 6) y = box.height - h - 6;
+    tip.style.left = Math.max(6, x) + 'px'; tip.style.top = Math.max(6, y) + 'px';
+    $$('.rule').forEach((r) => r.classList.toggle('hl', r.dataset.r === ruleOf(f.res === 'start' ? 'ok' : f.res === 'jitter' ? 'still' : f.res).id));
+  }
+  $('#simBox').addEventListener('mouseleave', () => $$('.rule').forEach((r) => r.classList.remove('hl')));
+  let shown = 0, mode = 'filt', simRaf = null;
+  function updateCounts(n) {
+    const c = { acc: 0, jump: 0, still: 0, gap: 0, ok: 0 };
+    let raw = 0, filt = 0, tr = 0;
+    for (let k = 0; k < n; k++) { const f = fixes[k]; const id = f.res === 'start' ? 'ok' : f.res === 'jitter' ? 'still' : f.res; c[id]++; raw += f.raw; filt += f.m; }
+    tr = n >= fixes.length ? trueTotal : trueTotal * n / fixes.length;
+    $$('[data-cnt]').forEach((e) => e.textContent = c[e.dataset.cnt]);
+    $('#rRaw').textContent = fmt(raw) + ' m'; $('#rFilt').textContent = fmt(filt) + ' m'; $('#rTrue').textContent = '≈ ' + fmt(tr) + ' m';
+  }
+  function paint(n) {
+    fixes.forEach((f, k) => {
+      const vis = k < n;
+      f.g.style.opacity = vis ? (mode === 'raw' ? .55 : 1) : 0;
+      if (f.rawLine) f.rawLine.setAttribute('opacity', vis && mode === 'raw' ? .75 : 0);
+      if (f.okLine) f.okLine.setAttribute('opacity', vis && mode === 'filt' ? 1 : 0);
+    });
+    updateCounts(n);
+  }
+  function play() {
+    cancelAnimationFrame(simRaf);
+    const t0 = performance.now(), dur = reduce ? 1 : 5200;
+    const step = (now) => { const p = Math.min(1, (now - t0) / dur); shown = Math.ceil(p * fixes.length); paint(shown); if (p < 1) simRaf = requestAnimationFrame(step); };
+    simRaf = requestAnimationFrame(step);
+  }
+  $('#simPlay').onclick = play;
+  const setMode = (m) => { mode = m; $('#viewRaw').setAttribute('aria-pressed', String(m === 'raw')); $('#viewFilt').setAttribute('aria-pressed', String(m === 'filt')); paint(shown); };
+  $('#viewRaw').onclick = () => setMode('raw'); $('#viewFilt').onclick = () => setMode('filt');
+  shown = fixes.length; renderRules(); renderLabels(); paint(shown);
+  listeners.push(renderRules, renderLabels);
+
+  /* ---------- points calculator (same rules as pointsRules.dailyActivityPoints) ---------- */
+  let goal = 4;
+  const km = $('#km');
+  function calc() {
+    const k = +km.value, meters = k * 1000;
+    const walk = Math.floor(Math.min(5000, Math.max(0, meters)) * 8 / 1000);
+    const g = k >= goal ? 20 : 0, c = $('#venue').checked ? 12 : 0;
+    const total = Math.min(72, walk + g + c);
+    km.style.setProperty('--p', (k / 8 * 100) + '%');
+    $('#kmOut').textContent = k.toFixed(1) + ' km';
+    $('#ptTotal').textContent = total;
+    $('#sW').style.width = walk / 72 * 100 + '%'; $('#sG').style.width = g / 72 * 100 + '%'; $('#sC').style.width = c / 72 * 100 + '%';
+    $('#lW').textContent = walk; $('#lG').textContent = g; $('#lC').textContent = c;
+    $('#capNote').textContent = k > 5 ? T(`超过 5 km 的 ${(k - 5).toFixed(1)} km 仍会记录，但不再增加步行积分`, `The ${(k - 5).toFixed(1)} km past 5 km is still recorded but earns no more walking points`)
+      : k < goal ? T(`再走 ${(goal - k).toFixed(1)} km 达成目标，+20`, `${(goal - k).toFixed(1)} km more to reach your goal: +20`) : T('今日目标已达成', 'Daily goal reached');
+    $('#formula').innerHTML = `<span class="c">// ${T('步行积分', 'walking points')}</span><br>floor(min(<span class="h">${fmt(meters)}</span>, 5000) × 8 / 1000) = <span class="h">${walk}</span><br><span class="c">// Daily Activity</span><br>min(72, ${walk} + ${g} + ${c}) = <span class="h">${total}</span>`;
+  }
+  km.addEventListener('input', calc);
+  $('#venue').addEventListener('change', calc);
+  $$('#goalChips .chip').forEach((b) => b.onclick = () => { goal = +b.dataset.g; $$('#goalChips .chip').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); calc(); });
+  calc(); listeners.push(calc);
+
+  /* ---------- scroll reveals (elements stay visible; motion only) ---------- */
+  if ('IntersectionObserver' in window && !reduce) {
+    const vh = innerHeight;
+    $$('.reveal').forEach((e) => { if (e.getBoundingClientRect().top > vh) e.classList.add('wait'); });
+    const io = new IntersectionObserver((ents) => ents.forEach((en) => {
+      if (!en.isIntersecting) return;
+      const t = en.target;
+      const sibs = [...t.parentElement.children].filter((x) => x.classList.contains('reveal'));
+      t.style.transitionDelay = Math.max(0, sibs.indexOf(t)) * 70 + 'ms';
+      t.classList.remove('wait'); io.unobserve(t);
+      if (t.closest('#gps') && t.classList.contains('panel') && !t.dataset.played) { t.dataset.played = 1; if ($('#sim').closest('.panel') === t) play(); }
+      t.querySelectorAll('[data-count]').forEach((c) => countUp(c, +c.dataset.count, 1200));
+    }), { threshold: .18 });
+    $$('.reveal').forEach((e) => io.observe(e));
+  }
+})();
+</script>
+</body>
+</html>
